@@ -94,4 +94,32 @@ describe('ApiKeyStrategy', () => {
 
     expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('not-the-billing-secret')
   })
+
+  // Caching is an optimisation: a Redis blip must not revoke a credential the
+  // database just validated, otherwise every caller is logged out at once.
+  it('keeps a valid API key authenticated when the Redis cache write fails', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((key: string) =>
+      key === 'apiKey.validationCacheTtlSeconds' || key === 'apiKey.userCacheTtlSeconds' ? 60 : undefined,
+    )
+    mocks.apiKeyService.getApiKeyByValue.mockResolvedValue({
+      userId: 'user-1',
+      organizationId: 'org-1',
+      keySuffix: 'abcd',
+      name: 'default',
+    })
+    mocks.userService.findOne.mockResolvedValue({
+      id: 'user-1',
+      role: 'admin',
+      email: 'dev@example.com',
+    })
+    mocks.redis.setex.mockRejectedValue(new Error('connect ETIMEDOUT'))
+
+    await expect(strategy.validate('valid-api-key')).resolves.toMatchObject({
+      userId: 'user-1',
+      organizationId: 'org-1',
+      role: 'admin',
+      email: 'dev@example.com',
+    })
+  })
 })

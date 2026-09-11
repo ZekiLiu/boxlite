@@ -97,7 +97,7 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
 
         const validationCacheTtl = this.configService.get('apiKey.validationCacheTtlSeconds')
         const cacheKey = this.generateValidationCacheKey(token)
-        await this.redis.setex(cacheKey, validationCacheTtl, JSON.stringify(apiKey))
+        await this.writeCacheBestEffort(cacheKey, validationCacheTtl, JSON.stringify(apiKey))
       }
       if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
         throw new UnauthorizedException('This API key has expired')
@@ -119,7 +119,11 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
           email: user.email,
         }
         const userCacheTtl = this.configService.get('apiKey.userCacheTtlSeconds')
-        await this.redis.setex(this.generateUserCacheKey(apiKey.userId), userCacheTtl, JSON.stringify(userCache))
+        await this.writeCacheBestEffort(
+          this.generateUserCacheKey(apiKey.userId),
+          userCacheTtl,
+          JSON.stringify(userCache),
+        )
       }
 
       const result = {
@@ -203,6 +207,17 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
     } catch (error) {
       this.logger.error('Error getting API key cache:', error)
       return null
+    }
+  }
+
+  // Caching is an optimisation: a failed write costs a future cache miss, not
+  // the credential the database just validated.
+  private async writeCacheBestEffort(key: string, ttlSeconds: number, value: string): Promise<void> {
+    try {
+      await this.redis.setex(key, ttlSeconds, value)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      this.logger.debug(`Cache write skipped for ${key}: ${reason}`)
     }
   }
 
